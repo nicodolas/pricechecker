@@ -1,0 +1,27 @@
+# Env files — KHÔNG bao giờ commit
+.env
+.env.local
+.env.*.local
+scraper/.env
+
+# Build output
+.next/
+out/
+
+# Dependencies
+node_modules/
+scraper/.venv/
+
+# Python cache
+scraper/__pycache__/
+scraper/**/__pycache__/
+*.pyc
+*.pyo
+scraper
+# Logs
+*.log
+npm-debug.log*
+scripts
+# OS
+.DS_Store
+Thumbs.db

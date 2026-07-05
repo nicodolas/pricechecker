@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --grab: #00B14F;
+  --shopee: #EE4D2D;
+  --baemin: #3AC5C0;
+}
