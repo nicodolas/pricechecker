@@ -7,45 +7,59 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    const app = req.nextUrl.searchParams.get('app') || 'grab-api'
     const apiKey = await getNextApiKey()
     if (!apiKey) return NextResponse.json({ error: 'No API key' })
 
-    const targetUrl = 'https://food.grab.com/vn/vi/search?query=com&lat=10.7769&lng=106.7009'
-    const params = new URLSearchParams({
-        url: targetUrl,
-        browser: 'true',
-        'page-load-delay': '6000',
-    })
+    let targetUrl: string
+    let method = 'GET'
+    let body: string | undefined
 
+    switch (app) {
+        case 'grab-api':
+            // Test Grab API trực tiếp — không qua ScrapingAnt
+            targetUrl = 'https://portal.grab.com/foodweb/v2/search'
+            method = 'POST'
+            body = JSON.stringify({
+                countryCode: 'VN',
+                keyword: 'cơm',
+                offset: 0,
+                pageSize: 5,
+                location: { latitude: 10.7769, longitude: 106.7009 },
+            })
+            break
+        case 'shopee-api':
+            targetUrl = 'https://gappapi.deliverynow.vn/api/delivery/get_delivery_list?keyword=com&latitude=10.7769&longitude=106.7009&is_foody=1&page_index=0'
+            break
+        default:
+            targetUrl = 'https://food.grab.com/vn/vi/search?query=com&lat=10.7769&lng=106.7009'
+    }
+
+    // Test 1: Direct call (không qua proxy)
     try {
-        const res = await fetch(`https://api.scrapingant.com/v2/general?${params}`, {
-            headers: { 'x-api-key': apiKey },
-            signal: AbortSignal.timeout(35000),
+        const directRes = await fetch(targetUrl, {
+            method,
+            headers: {
+                'content-type': 'application/json',
+                'origin': 'https://food.grab.com',
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0',
+                'x-country-code': 'VN',
+            },
+            body,
+            signal: AbortSignal.timeout(8000),
         })
-
-        const html = await res.text()
-
-        // Tìm các đoạn JSON có thể chứa data
-        const hasNextData = html.includes('__NEXT_DATA__')
-        const hasSearchMerchants = html.includes('searchMerchants')
-        const hasMerchantId = html.includes('merchantID') || html.includes('merchant_id')
-
-        // Tìm đoạn text xung quanh từ khoá quan trọng
-        let dataContext = ''
-        const idx = html.indexOf('merchantID')
-        if (idx > 0) dataContext = html.substring(Math.max(0, idx - 50), idx + 200)
+        const directText = await directRes.text()
 
         return NextResponse.json({
-            status: res.status,
-            contentLength: html.length,
-            hasNextData,
-            hasSearchMerchants,
-            hasMerchantId,
-            dataContext: dataContext || '(not found)',
-            // 200 ký tự ở body tag để xem content đã render chưa
-            bodyPreview: html.substring(html.indexOf('<body'), html.indexOf('<body') + 300),
+            app,
+            directCall: {
+                status: directRes.status,
+                contentLength: directText.length,
+                preview: directText.substring(0, 400),
+                isJson: directText.trim().startsWith('{') || directText.trim().startsWith('['),
+            },
         })
     } catch (err: any) {
-        return NextResponse.json({ error: err.message })
+        return NextResponse.json({ app, error: err.message })
     }
 }
