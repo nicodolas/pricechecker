@@ -18,8 +18,8 @@ export async function scrapeShopee(districtId: number, lat: number, lng: number)
 
     const params = new URLSearchParams({
         url: targetUrl,
-        browser: 'false',
-        'page-load-delay': '3000',
+        browser: 'true',
+        'page-load-delay': '4000',
     })
 
     try {

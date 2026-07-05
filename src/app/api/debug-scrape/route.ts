@@ -13,8 +13,8 @@ export async function GET(req: NextRequest) {
     const targetUrl = 'https://food.grab.com/vn/vi/search?query=com&lat=10.7769&lng=106.7009'
     const params = new URLSearchParams({
         url: targetUrl,
-        browser: 'false',
-        'page-load-delay': '3000',
+        browser: 'true',
+        'page-load-delay': '4000',
     })
 
     try {

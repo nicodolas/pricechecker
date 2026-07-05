@@ -20,9 +20,8 @@ export async function scrapeGrab(districtId: number, lat: number, lng: number): 
 
     const params = new URLSearchParams({
         url: targetUrl,
-        browser: 'false',
-        'wait-for-selector': '[data-testid="restaurant-list"]',
-        'page-load-delay': '3000',
+        browser: 'true',  // Bật JS rendering để load SPA
+        'page-load-delay': '4000',
     })
 
     try {
