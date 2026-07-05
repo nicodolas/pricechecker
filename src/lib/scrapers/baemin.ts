@@ -18,13 +18,13 @@ export async function scrapeBaemin(districtId: number, lat: number, lng: number)
 
     const params = new URLSearchParams({
         url: targetUrl,
-        'ant-key': apiKey,
         browser: 'false',
         'page-load-delay': '3000',
     })
 
     try {
         const res = await fetch(`${SCRAPINGANT_API}?${params}`, {
+            headers: { 'x-api-key': apiKey },
             signal: AbortSignal.timeout(25000),
         })
 

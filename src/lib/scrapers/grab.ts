@@ -20,15 +20,14 @@ export async function scrapeGrab(districtId: number, lat: number, lng: number): 
 
     const params = new URLSearchParams({
         url: targetUrl,
-        'ant-key': apiKey,
-        browser: 'false', // Dùng JS rendering nhẹ
+        browser: 'false',
         'wait-for-selector': '[data-testid="restaurant-list"]',
         'page-load-delay': '3000',
-        'response-type': 'json',
     })
 
     try {
         const res = await fetch(`${SCRAPINGANT_API}?${params}`, {
+            headers: { 'x-api-key': apiKey },
             signal: AbortSignal.timeout(25000),
         })
 
