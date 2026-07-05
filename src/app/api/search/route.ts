@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db, dishes, restaurants, districts, provinces, dishMappings } from '@/db'
-import { redis, cacheKeys, CACHE_TTL } from '@/lib/redis'
+import { db, dishes, restaurants, districts, provinces } from '@/db'
+import { redis, cacheKeys } from '@/lib/redis'
 import { eq, and, ilike, inArray } from 'drizzle-orm'
 import type { DishComparison, AppPrice, AppName, SearchResult } from '@/lib/types'
 import { MOCK_DISTRICTS, filterMockResults } from '@/lib/mock-data'
+import { scrapeAndSaveDistrict } from '@/lib/scrape-service'
+
+// Dữ liệu cũ hơn 15 phút → trigger scrape mới
+const STALE_THRESHOLD_MS = 15 * 60 * 1000
+// Cache kết quả search 15 phút
+const SEARCH_CACHE_TTL = 60 * 15
+// Key Redis đánh dấu quận đang được scrape (tránh chạy song song)
+const scrapingKey = (districtId: number) => `scraping:district:${districtId}`
 
 export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url)
@@ -14,19 +22,88 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: 'Thiếu query hoặc districtId' }, { status: 400 })
     }
 
-    // Dev mode: trả mock data, không chạm DB/Redis
+    // Dev mode: trả mock data
     if (process.env.NODE_ENV === 'development') {
         const result = filterMockResults(query, districtId, MOCK_DISTRICTS)
         return NextResponse.json(result)
     }
 
-    // Production: đọc cache rồi DB
+    // Check cache search trước
     const cacheKey = cacheKeys.searchResults(districtId, query)
     try {
         const cached = await redis.get<SearchResult>(cacheKey)
         if (cached) return NextResponse.json({ ...cached, fromCache: true })
     } catch (_) { }
 
+    // Kiểm tra dữ liệu trong DB có còn fresh không
+    const isStale = await isDistrictDataStale(districtId)
+
+    if (isStale) {
+        // Trigger scrape on-demand — chạy async không block response nếu đang có scrape rồi
+        triggerScrapeIfNotRunning(districtId)
+    }
+
+    // Query DB và trả kết quả (dù scrape đang chạy hay không)
+    return await queryAndRespond(districtId, query)
+}
+
+/**
+ * Kiểm tra dữ liệu quận có cũ hơn 15 phút không
+ */
+async function isDistrictDataStale(districtId: number): Promise<boolean> {
+    try {
+        // Check Redis flag — nếu vừa scrape xong trong 15 phút thì không cần scrape lại
+        const freshKey = `district:fresh:${districtId}`
+        const isFresh = await redis.get(freshKey)
+        if (isFresh) return false
+
+        // Check DB — lấy lastScrapedAt của món ăn mới nhất trong quận
+        const latest = await db
+            .select({ lastScrapedAt: dishes.lastScrapedAt })
+            .from(dishes)
+            .innerJoin(restaurants, eq(dishes.restaurantId, restaurants.id))
+            .where(eq(restaurants.districtId, districtId))
+            .orderBy(dishes.lastScrapedAt)
+            .limit(1)
+
+        if (!latest.length || !latest[0].lastScrapedAt) return true // Chưa có data → stale
+
+        const age = Date.now() - new Date(latest[0].lastScrapedAt).getTime()
+        return age > STALE_THRESHOLD_MS
+    } catch (_) {
+        return true // Lỗi → cứ scrape lại cho chắc
+    }
+}
+
+/**
+ * Trigger scrape nếu quận đó chưa đang được scrape
+ * Không await — chạy nền, không block user
+ */
+function triggerScrapeIfNotRunning(districtId: number) {
+    const key = scrapingKey(districtId)
+
+    redis.get(key).then((running) => {
+        if (running) return // Đang scrape rồi, bỏ qua
+
+        // Đánh dấu đang scrape (TTL 60s để tránh stuck)
+        redis.set(key, '1', { ex: 60 }).then(() => {
+            scrapeAndSaveDistrict(districtId)
+                .then(async (result) => {
+                    // Đánh dấu fresh 15 phút
+                    await redis.set(`district:fresh:${districtId}`, '1', { ex: SEARCH_CACHE_TTL })
+                    // Xóa lock
+                    await redis.del(key)
+                    console.log(`[on-demand] district ${districtId}: saved ${result.saved} items`)
+                })
+                .catch(async (err) => {
+                    await redis.del(key)
+                    console.error(`[on-demand] district ${districtId} failed:`, err.message)
+                })
+        }).catch(() => { })
+    }).catch(() => { })
+}
+
+async function queryAndRespond(districtId: number, query: string): Promise<NextResponse> {
     try {
         const districtRows = await db
             .select({ id: districts.id, name: districts.name, provinceId: districts.provinceId })
@@ -46,47 +123,29 @@ export async function GET(req: NextRequest) {
             .limit(1)
         const provinceName = provinceRows[0]?.name || ''
 
-        // Tìm nhà hàng trong quận khớp tên
-        const restaurantList = await db
-            .select()
-            .from(restaurants)
-            .where(
-                and(
-                    eq(restaurants.districtId, districtId),
-                    eq(restaurants.isActive, true),
-                    ilike(restaurants.name, `%${query}%`)
-                )
-            )
-
-        const restaurantIds = restaurantList.map((r) => r.id)
-
-        // Tìm món ăn khớp tên
+        // Tìm món khớp tên trong quận
         const dishesByName = await db
             .select()
             .from(dishes)
-            .where(and(eq(dishes.isAvailable, true), ilike(dishes.name, `%${query}%`)))
-            .limit(50)
-
-        // Merge restaurants
-        const allRestaurantIds = Array.from(new Set(dishesByName.map((d) => d.restaurantId)))
-        let allRestaurants = [...restaurantList]
-        if (allRestaurantIds.length > 0) {
-            const extra = await db
-                .select()
-                .from(restaurants)
-                .where(
-                    and(
-                        inArray(restaurants.id, allRestaurantIds),
-                        eq(restaurants.districtId, districtId)
-                    )
+            .innerJoin(restaurants, eq(dishes.restaurantId, restaurants.id))
+            .where(
+                and(
+                    eq(restaurants.districtId, districtId),
+                    eq(dishes.isAvailable, true),
+                    ilike(dishes.name, `%${query}%`)
                 )
-            const existingIds = new Set(allRestaurants.map((r) => r.id))
-            for (const r of extra) {
-                if (!existingIds.has(r.id)) allRestaurants.push(r)
-            }
-        }
+            )
+            .limit(60)
 
-        const comparisons = buildComparisons(dishesByName, allRestaurants)
+        // Tách dishes và restaurants từ join result
+        const dishList = dishesByName.map((r) => ({ ...r.dishes }))
+        const restaurantMap = Object.fromEntries(
+            dishesByName.map((r) => [r.restaurants.id, r.restaurants])
+        )
+
+        const isScrapingNow = await redis.get(scrapingKey(districtId)).catch(() => null)
+
+        const comparisons = buildComparisons(dishList, restaurantMap)
 
         const result: SearchResult = {
             dishes: comparisons,
@@ -94,11 +153,16 @@ export async function GET(req: NextRequest) {
             provinceName,
             query,
             generatedAt: new Date().toISOString(),
+            // @ts-ignore — thêm field phụ để frontend biết đang scrape
+            isUpdating: !!isScrapingNow && comparisons.length === 0,
         }
 
-        try {
-            await redis.set(cacheKey, result, { ex: CACHE_TTL })
-        } catch (_) { }
+        // Cache 15 phút nếu có kết quả
+        if (comparisons.length > 0) {
+            try {
+                await redis.set(cacheKeys.searchResults(districtId, query), result, { ex: SEARCH_CACHE_TTL })
+            } catch (_) { }
+        }
 
         return NextResponse.json(result)
     } catch (err) {
@@ -107,10 +171,9 @@ export async function GET(req: NextRequest) {
     }
 }
 
-function buildComparisons(dishList: any[], restaurantList: any[]): DishComparison[] {
+function buildComparisons(dishList: any[], restaurantMap: Record<string, any>): DishComparison[] {
     const now = new Date()
-    const ONE_HOUR = 60 * 60 * 1000
-    const restaurantMap = Object.fromEntries(restaurantList.map((r) => [r.id, r]))
+    const FIFTEEN_MIN = 15 * 60 * 1000
     const grouped = new Map<string, DishComparison>()
 
     for (const dish of dishList) {
@@ -120,7 +183,7 @@ function buildComparisons(dishList: any[], restaurantList: any[]): DishCompariso
         const key = `${restaurant.name}::${dish.name}`
         const app = restaurant.app as AppName
         const lastScraped = dish.lastScrapedAt ? new Date(dish.lastScrapedAt) : null
-        const isStale = lastScraped ? now.getTime() - lastScraped.getTime() > ONE_HOUR : true
+        const isStale = lastScraped ? now.getTime() - lastScraped.getTime() > FIFTEEN_MIN : true
 
         const price: AppPrice = {
             app,
