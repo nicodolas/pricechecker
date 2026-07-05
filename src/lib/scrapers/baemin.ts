@@ -3,13 +3,14 @@
  */
 
 import type { ScrapedDish } from '../scraper-types'
+import { getNextApiKey } from '../key-pool'
 
 const SCRAPINGANT_API = 'https://api.scrapingant.com/v2/general'
 
 export async function scrapeBaemin(districtId: number, lat: number, lng: number): Promise<ScrapedDish[]> {
-    const apiKey = process.env.SCRAPINGANT_API_KEY
+    const apiKey = await getNextApiKey()
     if (!apiKey) {
-        console.warn('[baemin] SCRAPINGANT_API_KEY not set')
+        console.warn('[baemin] No SCRAPINGANT_API_KEY configured')
         return []
     }
 

@@ -5,13 +5,14 @@
  */
 
 import type { ScrapedDish } from '../scraper-types'
+import { getNextApiKey } from '../key-pool'
 
 const SCRAPINGANT_API = 'https://api.scrapingant.com/v2/general'
 
 export async function scrapeGrab(districtId: number, lat: number, lng: number): Promise<ScrapedDish[]> {
-    const apiKey = process.env.SCRAPINGANT_API_KEY
+    const apiKey = await getNextApiKey()
     if (!apiKey) {
-        console.warn('[grab] SCRAPINGANT_API_KEY not set')
+        console.warn('[grab] No SCRAPINGANT_API_KEY configured')
         return []
     }
 
