@@ -9,7 +9,7 @@
         "lint": "next lint"
     },
     "dependencies": {
-        "next": "15.3.3",
+        "next": "15.3.5",
         "react": "^18",
         "react-dom": "^18",
         "@mendable/firecrawl-js": "^1.13.5",
@@ -27,7 +27,7 @@
         "autoprefixer": "^10.0.1",
         "drizzle-kit": "^0.22.8",
         "eslint": "^8",
-        "eslint-config-next": "15.3.3",
+        "eslint-config-next": "15.3.5",
         "postcss": "^8",
         "tailwindcss": "^3.4.1",
         "typescript": "^5"
