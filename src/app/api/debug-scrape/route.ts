@@ -14,26 +14,36 @@ export async function GET(req: NextRequest) {
     const params = new URLSearchParams({
         url: targetUrl,
         browser: 'true',
-        'page-load-delay': '4000',
+        'page-load-delay': '6000',
     })
 
     try {
         const res = await fetch(`https://api.scrapingant.com/v2/general?${params}`, {
             headers: { 'x-api-key': apiKey },
-            signal: AbortSignal.timeout(30000),
+            signal: AbortSignal.timeout(35000),
         })
 
-        // ScrapingAnt trả về HTML trực tiếp, không phải JSON
         const html = await res.text()
+
+        // Tìm các đoạn JSON có thể chứa data
+        const hasNextData = html.includes('__NEXT_DATA__')
+        const hasSearchMerchants = html.includes('searchMerchants')
+        const hasMerchantId = html.includes('merchantID') || html.includes('merchant_id')
+
+        // Tìm đoạn text xung quanh từ khoá quan trọng
+        let dataContext = ''
+        const idx = html.indexOf('merchantID')
+        if (idx > 0) dataContext = html.substring(Math.max(0, idx - 50), idx + 200)
 
         return NextResponse.json({
             status: res.status,
-            contentType: res.headers.get('content-type'),
-            apiKeyPrefix: apiKey.substring(0, 6) + '...',
             contentLength: html.length,
-            contentPreview: html.substring(0, 800),
-            hasSearchMerchants: html.includes('searchMerchants'),
-            hasReactRoot: html.includes('__NEXT_DATA__') || html.includes('react'),
+            hasNextData,
+            hasSearchMerchants,
+            hasMerchantId,
+            dataContext: dataContext || '(not found)',
+            // 200 ký tự ở body tag để xem content đã render chưa
+            bodyPreview: html.substring(html.indexOf('<body'), html.indexOf('<body') + 300),
         })
     } catch (err: any) {
         return NextResponse.json({ error: err.message })
