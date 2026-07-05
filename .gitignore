@@ -17,11 +17,11 @@ scraper/__pycache__/
 scraper/**/__pycache__/
 *.pyc
 *.pyo
-scraper
+
 # Logs
 *.log
 npm-debug.log*
-scripts
+
 # OS
 .DS_Store
 Thumbs.db
