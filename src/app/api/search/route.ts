@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
             .limit(50)
 
         // Merge restaurants
-        const allRestaurantIds = [...new Set(dishesByName.map((d) => d.restaurantId))]
+        const allRestaurantIds = Array.from(new Set(dishesByName.map((d) => d.restaurantId)))
         let allRestaurants = [...restaurantList]
         if (allRestaurantIds.length > 0) {
             const extra = await db
@@ -147,11 +147,11 @@ function buildComparisons(dishList: any[], restaurantList: any[]): DishCompariso
         }
     }
 
-    for (const comparison of grouped.values()) {
-        const validPrices = comparison.prices.filter((p) => p.price !== null)
+    for (const comparison of Array.from(grouped.values())) {
+        const validPrices = comparison.prices.filter((p: AppPrice) => p.price !== null)
         if (validPrices.length > 0) {
-            const min = Math.min(...validPrices.map((p) => p.price!))
-            comparison.cheapestApp = validPrices.find((p) => p.price === min)?.app || null
+            const min = Math.min(...validPrices.map((p: AppPrice) => p.price!))
+            comparison.cheapestApp = validPrices.find((p: AppPrice) => p.price === min)?.app || null
         }
     }
 
