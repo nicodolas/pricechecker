@@ -1,97 +1,87 @@
 /**
- * Grab Food scraper — gọi thẳng internal API của Grab
- * Không cần browser, không cần Firecrawl
+ * Grab Food scraper — dùng ScrapingAnt để render JS
+ * ScrapingAnt: 10,000 free credits/tháng, không cần credit card
+ * Đăng ký: https://app.scrapingant.com/signup
  */
 
 import type { ScrapedDish } from '../scraper-types'
 
-const GRAB_API = 'https://portal.grab.com/foodweb/v2/search'
-
-const HEADERS = {
-    'accept': 'application/json, text/plain, */*',
-    'accept-language': 'vi-VN,vi;q=0.9',
-    'content-type': 'application/json',
-    'origin': 'https://food.grab.com',
-    'referer': 'https://food.grab.com/',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    'x-country-code': 'VN',
-    'x-currency': 'VND',
-    'x-gfe-version': '20.1.0',
-    'x-grab-client': 'WEBSITE',
-}
+const SCRAPINGANT_API = 'https://api.scrapingant.com/v2/general'
 
 export async function scrapeGrab(districtId: number, lat: number, lng: number): Promise<ScrapedDish[]> {
-    const keywords = ['cơm', 'bún', 'phở', 'bánh mì', 'gà']
+    const apiKey = process.env.SCRAPINGANT_API_KEY
+    if (!apiKey) {
+        console.warn('[grab] SCRAPINGANT_API_KEY not set')
+        return []
+    }
+
+    const targetUrl = `https://food.grab.com/vn/vi/search?query=com&lat=${lat}&lng=${lng}`
+
+    const params = new URLSearchParams({
+        url: targetUrl,
+        'ant-key': apiKey,
+        browser: 'false', // Dùng JS rendering nhẹ
+        'wait-for-selector': '[data-testid="restaurant-list"]',
+        'page-load-delay': '3000',
+        'response-type': 'json',
+    })
+
+    try {
+        const res = await fetch(`${SCRAPINGANT_API}?${params}`, {
+            signal: AbortSignal.timeout(25000),
+        })
+
+        if (!res.ok) {
+            console.warn(`[grab] ScrapingAnt HTTP ${res.status}`)
+            return []
+        }
+
+        const data = await res.json()
+        const html = data?.content || ''
+
+        if (!html) return []
+
+        return parseGrabHtml(html)
+    } catch (err: any) {
+        console.error('[grab] scrape error:', err.message)
+        return []
+    }
+}
+
+function parseGrabHtml(html: string): ScrapedDish[] {
     const dishes: ScrapedDish[] = []
 
-    for (const keyword of keywords) {
+    // Parse JSON embedded trong script tags của Grab
+    const jsonMatches = html.matchAll(/"searchMerchants"\s*:\s*(\[[\s\S]*?\])/g)
+
+    for (const match of jsonMatches) {
         try {
-            const body = {
-                countryCode: 'VN',
-                keyword,
-                offset: 0,
-                pageSize: 20,
-                location: { latitude: lat, longitude: lng },
-                lunchTime: false,
-            }
-
-            const res = await fetch(GRAB_API, {
-                method: 'POST',
-                headers: HEADERS,
-                body: JSON.stringify(body),
-                signal: AbortSignal.timeout(8000),
-            })
-
-            if (!res.ok) {
-                console.warn(`[grab] ${keyword}: HTTP ${res.status}`)
-                continue
-            }
-
-            const data = await res.json()
-            const restaurants = data?.searchResult?.searchMerchants || []
-
-            for (const merchant of restaurants) {
-                const restaurantName = merchant?.name || ''
-                const restaurantId = merchant?.id || ''
-                const items = merchant?.cardContent?.recommendedItems || []
+            const merchants = JSON.parse(match[1])
+            for (const merchant of merchants) {
+                const restaurantName = merchant?.name || merchant?.displayName || ''
+                const restaurantId = merchant?.id || merchant?.merchantID || ''
+                const items = merchant?.cardContent?.recommendedItems
+                    || merchant?.menu?.recommendedItems
+                    || []
 
                 for (const item of items) {
-                    const price = item?.price?.amount
+                    const price = item?.price?.amount || item?.discountedPrice
                     if (!price || price <= 0) continue
 
                     dishes.push({
                         app: 'grab',
                         restaurantName,
-                        appRestaurantId: restaurantId,
+                        appRestaurantId: String(restaurantId),
                         dishName: item?.name || '',
-                        price: Math.round(price),
+                        price: Math.round(Number(price)),
                         originalPrice: item?.price?.originalAmount || null,
                         imageUrl: item?.imgUrl || null,
                         deepLink: `https://food.grab.com/vn/vi/restaurant/${restaurantId}`,
                     })
                 }
             }
-
-            // Delay nhỏ giữa các request để tránh rate limit
-            await sleep(300)
-        } catch (err: any) {
-            console.warn(`[grab] keyword "${keyword}" error:`, err.message)
-        }
+        } catch (_) { }
     }
 
-    return deduplicateDishes(dishes)
-}
-
-function deduplicateDishes(dishes: ScrapedDish[]): ScrapedDish[] {
-    const seen = new Set<string>()
-    return dishes.filter((d) => {
-        const key = `${d.appRestaurantId}::${d.dishName}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-    })
-}
-
-function sleep(ms: number) {
-    return new Promise((r) => setTimeout(r, ms))
+    return dishes
 }

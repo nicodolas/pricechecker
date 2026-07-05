@@ -1,62 +1,73 @@
 /**
- * ShopeeFood scraper — gọi thẳng internal API
+ * ShopeeFood scraper — dùng ScrapingAnt để render JS
  */
 
 import type { ScrapedDish } from '../scraper-types'
 
-const SHOPEE_API = 'https://gappapi.deliverynow.vn/api/delivery/get_delivery_list'
-
-const HEADERS = {
-    'accept': 'application/json, text/plain, */*',
-    'accept-language': 'vi-VN,vi;q=0.9',
-    'content-type': 'application/json',
-    'origin': 'https://shopeefood.vn',
-    'referer': 'https://shopeefood.vn/',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'x-foody-access-token': '',
-    'x-foody-api-version': '1',
-    'x-foody-app-type': '1004',
-    'x-foody-client-id': '',
-    'x-foody-client-language': 'vi',
-    'x-foody-client-type': '1',
-}
+const SCRAPINGANT_API = 'https://api.scrapingant.com/v2/general'
 
 export async function scrapeShopee(districtId: number, lat: number, lng: number): Promise<ScrapedDish[]> {
-    const keywords = ['cơm', 'bún', 'phở', 'gà', 'bánh mì']
+    const apiKey = process.env.SCRAPINGANT_API_KEY
+    if (!apiKey) {
+        console.warn('[shopee] SCRAPINGANT_API_KEY not set')
+        return []
+    }
+
+    const targetUrl = `https://shopeefood.vn/ho-chi-minh/food/tim-kiem?q=com&lat=${lat}&lng=${lng}`
+
+    const params = new URLSearchParams({
+        url: targetUrl,
+        'ant-key': apiKey,
+        browser: 'false',
+        'page-load-delay': '3000',
+    })
+
+    try {
+        const res = await fetch(`${SCRAPINGANT_API}?${params}`, {
+            signal: AbortSignal.timeout(25000),
+        })
+
+        if (!res.ok) {
+            console.warn(`[shopee] ScrapingAnt HTTP ${res.status}`)
+            return []
+        }
+
+        const data = await res.json()
+        const html = data?.content || ''
+
+        if (!html) return []
+
+        return parseShopeHtml(html)
+    } catch (err: any) {
+        console.error('[shopee] scrape error:', err.message)
+        return []
+    }
+}
+
+function parseShopeHtml(html: string): ScrapedDish[] {
     const dishes: ScrapedDish[] = []
 
-    for (const keyword of keywords) {
+    // Parse JSON từ window.__INITIAL_STATE__ hoặc script tags
+    const patterns = [
+        /"delivery_list"\s*:\s*(\[[\s\S]*?\])\s*[,}]/,
+        /window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?})\s*;/,
+    ]
+
+    for (const pattern of patterns) {
+        const match = html.match(pattern)
+        if (!match) continue
+
         try {
-            const params = new URLSearchParams({
-                keyword,
-                latitude: String(lat),
-                longitude: String(lng),
-                is_foody: '1',
-                page_index: '0',
-            })
+            const parsed = JSON.parse(match[1])
+            const list = Array.isArray(parsed) ? parsed : parsed?.delivery_list || []
 
-            const res = await fetch(`${SHOPEE_API}?${params}`, {
-                method: 'GET',
-                headers: HEADERS,
-                signal: AbortSignal.timeout(8000),
-            })
-
-            if (!res.ok) {
-                console.warn(`[shopee] ${keyword}: HTTP ${res.status}`)
-                continue
-            }
-
-            const data = await res.json()
-            const restaurants = data?.reply?.delivery_list || []
-
-            for (const restaurant of restaurants) {
+            for (const restaurant of list) {
                 const restaurantName = restaurant?.name || ''
                 const restaurantId = String(restaurant?.id || '')
+                const topDishes = restaurant?.top_dishes || restaurant?.dishes || []
 
-                // ShopeeFood trả items ở top_dishes
-                const topDishes = restaurant?.top_dishes || []
                 for (const dish of topDishes) {
-                    const price = dish?.price
+                    const price = dish?.price || dish?.total_price
                     if (!price || price <= 0) continue
 
                     dishes.push({
@@ -64,33 +75,17 @@ export async function scrapeShopee(districtId: number, lat: number, lng: number)
                         restaurantName,
                         appRestaurantId: restaurantId,
                         dishName: dish?.name || '',
-                        price: Math.round(price),
-                        originalPrice: dish?.total_price || null,
+                        price: Math.round(Number(price)),
+                        originalPrice: null,
                         imageUrl: dish?.photos?.[0]?.value || null,
                         deepLink: `https://shopeefood.vn/restaurant/${restaurantId}`,
                     })
                 }
             }
 
-            await sleep(300)
-        } catch (err: any) {
-            console.warn(`[shopee] keyword "${keyword}" error:`, err.message)
-        }
+            if (dishes.length > 0) break
+        } catch (_) { }
     }
 
-    return deduplicateDishes(dishes)
-}
-
-function deduplicateDishes(dishes: ScrapedDish[]): ScrapedDish[] {
-    const seen = new Set<string>()
-    return dishes.filter((d) => {
-        const key = `${d.appRestaurantId}::${d.dishName}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-    })
-}
-
-function sleep(ms: number) {
-    return new Promise((r) => setTimeout(r, ms))
+    return dishes
 }
