@@ -36,9 +36,7 @@ export async function scrapeGrab(districtId: number, lat: number, lng: number): 
             return []
         }
 
-        const data = await res.json()
-        const html = data?.content || ''
-
+        const html = await res.text()
         if (!html) return []
 
         return parseGrabHtml(html)

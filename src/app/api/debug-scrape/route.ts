@@ -23,16 +23,17 @@ export async function GET(req: NextRequest) {
             signal: AbortSignal.timeout(30000),
         })
 
-        const data = await res.json() as any
+        // ScrapingAnt trả về HTML trực tiếp, không phải JSON
+        const html = await res.text()
 
         return NextResponse.json({
             status: res.status,
+            contentType: res.headers.get('content-type'),
             apiKeyPrefix: apiKey.substring(0, 6) + '...',
-            hasContent: !!data?.content,
-            contentLength: data?.content?.length || 0,
-            // Xem 500 ký tự đầu để debug cấu trúc HTML
-            contentPreview: data?.content?.substring(0, 500) || null,
-            error: data?.detail || data?.error || null,
+            contentLength: html.length,
+            contentPreview: html.substring(0, 800),
+            hasSearchMerchants: html.includes('searchMerchants'),
+            hasReactRoot: html.includes('__NEXT_DATA__') || html.includes('react'),
         })
     } catch (err: any) {
         return NextResponse.json({ error: err.message })
